@@ -65,8 +65,10 @@ SD_HandleTypeDef hsd;
 
 TIM_HandleTypeDef htim3;
 
+UART_HandleTypeDef huart7;
 UART_HandleTypeDef huart10;
 UART_HandleTypeDef huart6;
+DMA_HandleTypeDef hdma_uart7_rx;
 
 SRAM_HandleTypeDef hsram1;
 SRAM_HandleTypeDef hsram2;
@@ -78,6 +80,13 @@ const osThreadAttr_t RunMoters_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 128 * 4
 };
+/* Definitions for Radio_Receiver */
+osThreadId_t Radio_ReceiverHandle;
+const osThreadAttr_t Radio_Receiver_attributes = {
+  .name = "Radio_Receiver",
+  .priority = (osPriority_t) osPriorityLow,
+  .stack_size = 128 * 4
+};
 /* USER CODE BEGIN PV */
 uint16_t motor1Val;
 /* USER CODE END PV */
@@ -85,6 +94,7 @@ uint16_t motor1Val;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_DAC_Init(void);
 static void MX_DFSDM1_Init(void);
@@ -98,7 +108,9 @@ static void MX_UART10_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_UART7_Init(void);
 void StartDefaultTask(void *argument);
+void Receive_Radio_Signal(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -106,7 +118,6 @@ void StartDefaultTask(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
 /* USER CODE END 0 */
 
 /**
@@ -137,6 +148,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC1_Init();
   MX_DAC_Init();
   MX_DFSDM1_Init();
@@ -150,6 +162,7 @@ int main(void)
   MX_USART6_UART_Init();
   MX_I2C2_Init();
   MX_TIM3_Init();
+  MX_UART7_Init();
   /* USER CODE BEGIN 2 */
   BSP_LCD_Init();
   BSP_LCD_Clear(LCD_COLOR_WHITE);
@@ -184,6 +197,9 @@ int main(void)
   /* Create the thread(s) */
   /* creation of RunMoters */
   RunMotersHandle = osThreadNew(StartDefaultTask, NULL, &RunMoters_attributes);
+
+  /* creation of Radio_Receiver */
+  Radio_ReceiverHandle = osThreadNew(Receive_Radio_Signal, NULL, &Radio_Receiver_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -692,6 +708,39 @@ static void MX_TIM3_Init(void)
 }
 
 /**
+  * @brief UART7 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UART7_Init(void)
+{
+
+  /* USER CODE BEGIN UART7_Init 0 */
+
+  /* USER CODE END UART7_Init 0 */
+
+  /* USER CODE BEGIN UART7_Init 1 */
+
+  /* USER CODE END UART7_Init 1 */
+  huart7.Instance = UART7;
+  huart7.Init.BaudRate = 115200;
+  huart7.Init.WordLength = UART_WORDLENGTH_8B;
+  huart7.Init.StopBits = UART_STOPBITS_1;
+  huart7.Init.Parity = UART_PARITY_NONE;
+  huart7.Init.Mode = UART_MODE_TX_RX;
+  huart7.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart7.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart7) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN UART7_Init 2 */
+
+  /* USER CODE END UART7_Init 2 */
+
+}
+
+/**
   * @brief UART10 Initialization Function
   * @param None
   * @retval None
@@ -754,6 +803,22 @@ static void MX_USART6_UART_Init(void)
   /* USER CODE BEGIN USART6_Init 2 */
 
   /* USER CODE END USART6_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
 
 }
 
@@ -980,7 +1045,9 @@ static void MX_FSMC_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	__NOP(); //checks if we receive all data
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -995,27 +1062,102 @@ void StartDefaultTask(void *argument)
   /* init code for USB_HOST */
   MX_USB_HOST_Init();
   /* USER CODE BEGIN 5 */
-  char buffer[20];
+  //char buffer[20];
   //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,5); //this compares tim3 channel 2s pulse  and changes the pulse if its not the same
   /* Infinite loop */
-  uint16_t resistorVal = 0;
-  uint16_t printVal;
+  //uint16_t resistorVal = 0;
+  //uint16_t printVal;
   for(;;)
   {
-	  HAL_ADC_Start(&hadc1);
-	  HAL_ADC_PollForConversion(&hadc1,50);
-	  resistorVal = HAL_ADC_GetValue(&hadc1);
-	  motor1Val = (DUTY_CYCLE_MAX * resistorVal) / RESISTOR_MAX;
-	  BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
-	  BSP_LCD_DisplayStringAtLine(1, buffer);
-	  itoa(motor1Val,buffer,10);
-	  BSP_LCD_SetTextColor(LCD_COLOR_RED);
-	  BSP_LCD_DisplayStringAtLine(1, buffer);
-	  __HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_3,motor1Val);
-	  __HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,motor1Val);
+	  //HAL_ADC_Start(&hadc1);
+	  //HAL_ADC_PollForConversion(&hadc1,50);
+	  //resistorVal = HAL_ADC_GetValue(&hadc1);
+	  //motor1Val = (DUTY_CYCLE_MAX * resistorVal) / RESISTOR_MAX;
+	  //BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+	  //BSP_LCD_DisplayStringAtLine(1, buffer);
+	  //itoa(motor1Val,buffer,10);
+	  //BSP_LCD_SetTextColor(LCD_COLOR_RED);
+	  //BSP_LCD_DisplayStringAtLine(1, buffer);
+	  //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_3,motor1Val);
+	  //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,motor1Val);
 	  osDelay(1);
   }
   /* USER CODE END 5 */
+}
+
+/* USER CODE BEGIN Header_Receive_Radio_Signal */
+/**
+* @brief Function implementing the Radio_Receiver thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Receive_Radio_Signal */
+void Receive_Radio_Signal(void *argument)
+{
+  /* USER CODE BEGIN Receive_Radio_Signal */
+
+  /* Infinite loop */
+	SBUS sbus;
+	sbus.arm = 0;
+	sbus.disarm = 0;
+  for(;;)
+  {
+	  if (RC_READ_SBUS(&huart7 ,&sbus)) {
+
+	  			sendString("CH1:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[0], &huart6);
+
+	  			sendString("CH2:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[1], &huart6);
+
+	  			sendString("CH3:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[2], &huart6);
+
+	  			sendString("CH4:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[3], &huart6);
+
+	  			sendString("CH5:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[4], &huart6);
+
+	  			sendString("CH6:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[5], &huart6);
+
+	  			sendString("CH7:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[6], &huart6);
+
+	  			sendString("CH8:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[7], &huart6);
+
+	  			sendString("CH9:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[8], &huart6);
+
+	  			sendString("CH10:", &huart6);
+
+	  			sendInt(sbus.PWM_US_RC_CH[9], &huart6);
+
+	  			if (sbus.failsafe) {
+	  				sendString("failsafe\r\n", &huart6);
+	  			}
+	  			if (sbus.frame_lost) {
+	  				sendString("frame_lost\r\n", &huart6);
+	  			}
+
+	  		}
+	  		if (sbus.error) {
+	  			sendString("Connection Error!!\r\n", &huart6);
+	  		}
+
+  }
+  /* USER CODE END Receive_Radio_Signal */
 }
 
 /**

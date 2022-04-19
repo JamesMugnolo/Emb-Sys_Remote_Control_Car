@@ -1,0 +1,6 @@
+Black - Ground 
+White - V battery 
+Green/Blue - ESC input for main plug 
+Orange/Red - 5v 
+Yellow - battery monitoring (reduced voltage)
+green - UART 3plug 

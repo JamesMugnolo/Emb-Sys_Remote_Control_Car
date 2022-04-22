@@ -61,10 +61,10 @@ uint8_t RC_READ_SBUS(UART_HandleTypeDef *huart,SBUS *sbus) {
 		sbus->PWM_US_RC_CH[15] = (((uint16_t) sbus->sbus_msg_bytes[21] >> 5)
 				| ((uint16_t) sbus->sbus_msg_bytes[22] << 3)) & 0x07FF;
 
-	for (uint8_t i = 0; i <= SBUS_MAX_CHANNEL_CNT; i++) {
-		sbus->PWM_US_RC_CH[i] = MAP(sbus->PWM_US_RC_CH[i], SBUS_IN_MIN_PWM,
-				SBUS_IN_MAX_PWM, SBUS_OUT_MIN_PWM, SBUS_OUT_MAX_PWM);
-	}
+	//for (uint8_t i = 0; i <= SBUS_MAX_CHANNEL_CNT; i++) {
+	//	sbus->PWM_US_RC_CH[i] = MAP(sbus->PWM_US_RC_CH[i], SBUS_IN_MIN_PWM,
+	//			SBUS_IN_MAX_PWM, SBUS_OUT_MIN_PWM, SBUS_OUT_MAX_PWM);
+	//}
 
 	if (sbus->sbus_msg_bytes[23] & (1 << 2)) {
 		sbus->frame_lost = 1;

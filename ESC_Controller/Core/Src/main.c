@@ -26,6 +26,7 @@
 /* USER CODE BEGIN Includes */
 #include "stm32F413h_discovery_lcd.h"
 #include <rc_input_sbus.h>
+#include "stm32f4xx_hal.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,7 +42,22 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+void sendString(uint8_t* value, UART_HandleTypeDef *huart)
+{
+	HAL_UART_Transmit_IT(&huart, value, strlen(value));
+}
 
+void sendInt(uint16_t value, UART_HandleTypeDef *huart)
+{
+	char buffer[25];
+	itoa(value, buffer, strlen(buffer));
+	HAL_UART_Transmit_IT(&huart, buffer, strlen(buffer));
+}
+
+int position1Vals[50];
+int position2Vals[50];
+int position3Vals[50];
+int position4Vals[50];
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -84,7 +100,7 @@ const osThreadAttr_t RunMoters_attributes = {
 osThreadId_t Radio_ReceiverHandle;
 const osThreadAttr_t Radio_Receiver_attributes = {
   .name = "Radio_Receiver",
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityHigh,
   .stack_size = 128 * 4
 };
 /* USER CODE BEGIN PV */
@@ -1097,65 +1113,90 @@ void Receive_Radio_Signal(void *argument)
   /* USER CODE BEGIN Receive_Radio_Signal */
 
   /* Infinite loop */
+	 //char buffer[20];
+	  //itoa(motor1Val,buffer,10);
 	SBUS sbus;
 	sbus.arm = 0;
 	sbus.disarm = 0;
+	int count = 0;
   for(;;)
   {
-	  if (RC_READ_SBUS(&huart7 ,&sbus)) {
+		if (RC_READ_SBUS(&huart7 ,&sbus)) {
 
-	  			sendString("CH1:", &huart6);
+			sendString("CH1:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[0], &huart6);
+			position1Vals[count] = sbus.PWM_US_RC_CH[4];
+			sendInt(sbus.PWM_US_RC_CH[0], &huart6);
 
-	  			sendString("CH2:", &huart6);
+			sendString("CH2:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[1], &huart6);
+			position2Vals[count] = sbus.PWM_US_RC_CH[5];
+			sendInt(sbus.PWM_US_RC_CH[1], &huart6);
 
-	  			sendString("CH3:", &huart6);
+			sendString("CH3:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[2], &huart6);
+			position3Vals[count] = sbus.PWM_US_RC_CH[6];
+			sendInt(sbus.PWM_US_RC_CH[2], &huart6);
 
-	  			sendString("CH4:", &huart6);
+			sendString("CH4:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[3], &huart6);
+			position4Vals[count] = sbus.PWM_US_RC_CH[7];
+			sendInt(sbus.PWM_US_RC_CH[3], &huart6);
 
-	  			sendString("CH5:", &huart6);
+			sendString("CH5:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[4], &huart6);
+			sendInt(sbus.PWM_US_RC_CH[4], &huart6);
 
-	  			sendString("CH6:", &huart6);
+			sendString("CH6:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[5], &huart6);
+			sendInt(sbus.PWM_US_RC_CH[5], &huart6);
 
-	  			sendString("CH7:", &huart6);
+			sendString("CH7:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[6], &huart6);
+			sendInt(sbus.PWM_US_RC_CH[6], &huart6);
 
-	  			sendString("CH8:", &huart6);
+			sendString("CH8:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[7], &huart6);
+			sendInt(sbus.PWM_US_RC_CH[7], &huart6);
 
-	  			sendString("CH9:", &huart6);
+			sendString("CH9:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[8], &huart6);
+			sendInt(sbus.PWM_US_RC_CH[8], &huart6);
 
-	  			sendString("CH10:", &huart6);
+			sendString("CH10:", &huart6);
 
-	  			sendInt(sbus.PWM_US_RC_CH[9], &huart6);
+			sendInt(sbus.PWM_US_RC_CH[9], &huart6);
 
-	  			if (sbus.failsafe) {
-	  				sendString("failsafe\r\n", &huart6);
-	  			}
-	  			if (sbus.frame_lost) {
-	  				sendString("frame_lost\r\n", &huart6);
-	  			}
+			if (sbus.failsafe) {
+				sendString("failsafe\r\n", &huart6);
+			}
+			if (sbus.frame_lost) {
+				sendString("frame_lost\r\n", &huart6);
+			}
+			count++;
 
-	  		}
-	  		if (sbus.error) {
-	  			sendString("Connection Error!!\r\n", &huart6);
-	  		}
-
+	  	}
+	if (sbus.error) {
+		sendString("Connection Error!!\r\n", &huart6);
+	}
+	if(count >= 50) {
+		count = 0;
+		int tot1 = 0;
+		int tot2 = 0;
+		int tot3 = 0;
+		int tot4 = 0;
+		for(int i=0; i< 50; i++) {
+		  tot1 += position1Vals[i];
+		  tot2 += position2Vals[i];
+		  tot3 += position3Vals[i];
+		  tot4 += position4Vals[i];
+		}
+		tot1 = tot1 / 50;
+		tot2 = tot2 / 50;
+		tot3 = tot3 / 50;
+		tot4 = tot4 / 50;
+		__NOP();
+	}
   }
   /* USER CODE END Receive_Radio_Signal */
 }

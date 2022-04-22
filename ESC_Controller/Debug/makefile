@@ -77,8 +77,8 @@ ESC_Controller.bin \
 all: ESC_Controller.elf secondary-outputs
 
 # Tool invocations
-ESC_Controller.elf: $(OBJS) $(USER_OBJS) J:\C\ Workspace\ESC_Controller\STM32F413ZHTX_FLASH.ld
-	arm-none-eabi-gcc -o "ESC_Controller.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"J:\C Workspace\ESC_Controller\STM32F413ZHTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="ESC_Controller.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+ESC_Controller.elf: $(OBJS) $(USER_OBJS) J:\Final_Project_Embed_Sys\Emb-Sys_Remote_Control_Car\ESC_Controller\STM32F413ZHTX_FLASH.ld
+	arm-none-eabi-gcc -o "ESC_Controller.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"J:\Final_Project_Embed_Sys\Emb-Sys_Remote_Control_Car\ESC_Controller\STM32F413ZHTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="ESC_Controller.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

@@ -13,7 +13,7 @@
 #define SBUS_ERROR_CNT 10
 
 /* Define if you want to use ARM/DISARM with sticks*/
-#define SBUS_ARM_DISARM_STICKS
+//#define SBUS_ARM_DISARM_STICKS
 
 #ifdef SBUS_ARM_DISARM_STICKS
 #define SBUS_DISARM_CNT 10

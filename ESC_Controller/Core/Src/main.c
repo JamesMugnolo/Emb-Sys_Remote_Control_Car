@@ -25,19 +25,44 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "stm32F413h_discovery_lcd.h"
+#include <stdbool.h>
 #include <rc_input_sbus.h>
 #include "stm32f4xx_hal.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-#define RESISTOR_MAX 4095
-#define DUTY_CYCLE_MAX 2000
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define RESISTOR_MAX 4095
+#define DUTY_CYCLE_MAX 2000
+#define RX_MAX 1810
+#define RX_MIN 172
+#define RX_MID_POINT 992
+#define RX_DEADZONE_THRESH 30
+#define SWITCH_LOW_THRESHOLD 500
+#define SWITCH_HIGH_THRESHOLD 1500
+#define MAP_MAX 100
+#define MAP_MIN -100
+#define RX_VERTICAL_CH 0
+#define RX_HORIZONTAL_CH 1
+#define RX_ARM 4
+
+//BUFFER DEFS
+#define ARM_FG 0
+#define RX_CON_FG 1
+#define RX_FAILSAFE_FG 2
+#define BAT_LVL_FG 3
+#define THROTTLE_FG 4
+
+
+#define SWITCH_LOW 0
+#define SWITCH_MID 1
+#define SWITCH_HIGH 2
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -58,6 +83,26 @@ int position1Vals[50];
 int position2Vals[50];
 int position3Vals[50];
 int position4Vals[50];
+uint16_t ChannelVals[8];
+float MappedVals[8];
+int FlagBuffer[5];
+
+int MapToSwitch(uint16_t swVal)
+{
+	if(swVal < SWITCH_LOW_THRESHOLD)
+		return SWITCH_LOW;
+	else if(swVal > SWITCH_HIGH_THRESHOLD)
+		return SWITCH_HIGH;
+	else
+		return SWITCH_MID;
+}
+
+float MapToPercent(uint16_t rxVal)
+{
+	float val = rxVal;
+	return ((((val - RX_MIN) * (MAP_MAX - MAP_MIN))
+			/ (RX_MAX - RX_MIN)) + MAP_MIN);
+}
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -103,8 +148,17 @@ const osThreadAttr_t Radio_Receiver_attributes = {
   .priority = (osPriority_t) osPriorityHigh,
   .stack_size = 128 * 4
 };
+/* Definitions for RadioToPercent */
+osThreadId_t RadioToPercentHandle;
+const osThreadAttr_t RadioToPercent_attributes = {
+  .name = "RadioToPercent",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 128 * 4
+};
 /* USER CODE BEGIN PV */
 uint16_t motor1Val;
+uint16_t horizontalPos;
+uint16_t vertiaclPos;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -127,6 +181,7 @@ static void MX_TIM3_Init(void);
 static void MX_UART7_Init(void);
 void StartDefaultTask(void *argument);
 void Receive_Radio_Signal(void *argument);
+void StartRadioToPercent(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -216,6 +271,9 @@ int main(void)
 
   /* creation of Radio_Receiver */
   Radio_ReceiverHandle = osThreadNew(Receive_Radio_Signal, NULL, &Radio_Receiver_attributes);
+
+  /* creation of RadioToPercent */
+  RadioToPercentHandle = osThreadNew(StartRadioToPercent, NULL, &RadioToPercent_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -739,10 +797,10 @@ static void MX_UART7_Init(void)
 
   /* USER CODE END UART7_Init 1 */
   huart7.Instance = UART7;
-  huart7.Init.BaudRate = 115200;
-  huart7.Init.WordLength = UART_WORDLENGTH_8B;
-  huart7.Init.StopBits = UART_STOPBITS_1;
-  huart7.Init.Parity = UART_PARITY_NONE;
+  huart7.Init.BaudRate = 100000;
+  huart7.Init.WordLength = UART_WORDLENGTH_9B;
+  huart7.Init.StopBits = UART_STOPBITS_2;
+  huart7.Init.Parity = UART_PARITY_EVEN;
   huart7.Init.Mode = UART_MODE_TX_RX;
   huart7.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart7.Init.OverSampling = UART_OVERSAMPLING_16;
@@ -1118,87 +1176,91 @@ void Receive_Radio_Signal(void *argument)
 	SBUS sbus;
 	sbus.arm = 0;
 	sbus.disarm = 0;
+
+	FlagBuffer[RX_CON_FG] = 0;
+	FlagBuffer[RX_FAILSAFE_FG] = 0;
+	FlagBuffer[RX_ARM] = 0;
 	int count = 0;
   for(;;)
   {
 		if (RC_READ_SBUS(&huart7 ,&sbus)) {
 
-			sendString("CH1:", &huart6);
-
-			position1Vals[count] = sbus.PWM_US_RC_CH[4];
-			sendInt(sbus.PWM_US_RC_CH[0], &huart6);
-
-			sendString("CH2:", &huart6);
-
-			position2Vals[count] = sbus.PWM_US_RC_CH[5];
-			sendInt(sbus.PWM_US_RC_CH[1], &huart6);
-
-			sendString("CH3:", &huart6);
-
-			position3Vals[count] = sbus.PWM_US_RC_CH[6];
-			sendInt(sbus.PWM_US_RC_CH[2], &huart6);
-
-			sendString("CH4:", &huart6);
-
-			position4Vals[count] = sbus.PWM_US_RC_CH[7];
-			sendInt(sbus.PWM_US_RC_CH[3], &huart6);
-
-			sendString("CH5:", &huart6);
-
-			sendInt(sbus.PWM_US_RC_CH[4], &huart6);
-
-			sendString("CH6:", &huart6);
-
-			sendInt(sbus.PWM_US_RC_CH[5], &huart6);
-
-			sendString("CH7:", &huart6);
-
-			sendInt(sbus.PWM_US_RC_CH[6], &huart6);
-
-			sendString("CH8:", &huart6);
-
-			sendInt(sbus.PWM_US_RC_CH[7], &huart6);
-
-			sendString("CH9:", &huart6);
-
-			sendInt(sbus.PWM_US_RC_CH[8], &huart6);
-
-			sendString("CH10:", &huart6);
-
-			sendInt(sbus.PWM_US_RC_CH[9], &huart6);
-
-			if (sbus.failsafe) {
-				sendString("failsafe\r\n", &huart6);
+			//verifying that sbus is reading properly and we are connected(not failsafing)
+			//If we enter, we are connected now.
+			if(!FlagBuffer[RX_CON_FG]){
+				FlagBuffer[RX_CON_FG] = 1;
 			}
-			if (sbus.frame_lost) {
-				sendString("frame_lost\r\n", &huart6);
+			if(!sbus.failsafe){
+				FlagBuffer[RX_FAILSAFE_FG] = 1;
 			}
+			else{
+				FlagBuffer[RX_FAILSAFE_FG] = 0;
+			}
+
+
+			for(int i = 0; i < sizeof(ChannelVals); i++ ) {
+				ChannelVals[i] = sbus.PWM_US_RC_CH[i];
+			}
+
+			if(MapToSwitch(ChannelVals[RX_ARM]) == SWITCH_HIGH)
+				FlagBuffer[ARM_FG] = 1;
+
+
+
+
+			//debug stuff
+			position1Vals[count] = sbus.PWM_US_RC_CH[0];
+			position2Vals[count] = sbus.PWM_US_RC_CH[1];
+			position3Vals[count] = sbus.PWM_US_RC_CH[2];
+			position4Vals[count] = sbus.PWM_US_RC_CH[3];
 			count++;
-
+			//end debug stuff
 	  	}
-	if (sbus.error) {
-		sendString("Connection Error!!\r\n", &huart6);
-	}
-	if(count >= 50) {
-		count = 0;
-		int tot1 = 0;
-		int tot2 = 0;
-		int tot3 = 0;
-		int tot4 = 0;
-		for(int i=0; i< 50; i++) {
-		  tot1 += position1Vals[i];
-		  tot2 += position2Vals[i];
-		  tot3 += position3Vals[i];
-		  tot4 += position4Vals[i];
+		//Too many frames without connection.
+		else if(sbus.error) {
+			FlagBuffer[RX_CON_FG] = 0;
 		}
-		tot1 = tot1 / 50;
-		tot2 = tot2 / 50;
-		tot3 = tot3 / 50;
-		tot4 = tot4 / 50;
-		__NOP();
-	}
+
+		//more debug stuff
+		if(count >= 50) {
+			count = 0;
+			int tot1 = 0;
+			int tot2 = 0;
+			int tot3 = 0;
+			int tot4 = 0;
+			for(int i=0; i< 50; i++) {
+				tot1 += position1Vals[i];
+				tot2 += position2Vals[i];
+				tot3 += position3Vals[i];
+				tot4 += position4Vals[i];
+			}
+			tot1 = tot1 / 50;
+			tot2 = tot2 / 50;
+			tot3 = tot3 / 50;
+			tot4 = tot4 / 50;
+			__NOP();
+		}
+		//end more debug stuff
   }
   /* USER CODE END Receive_Radio_Signal */
+}
+
+/* USER CODE BEGIN Header_StartRadioToPercent */
+/**
+* @brief Function implementing the RadioToPercent thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartRadioToPercent */
+void StartRadioToPercent(void *argument)
+{
+  /* USER CODE BEGIN StartRadioToPercent */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartRadioToPercent */
 }
 
 /**

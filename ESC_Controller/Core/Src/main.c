@@ -38,20 +38,35 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define RESISTOR_MAX 4095
-#define DUTY_CYCLE_MAX 2000
+
+
+//RX DEFS
 #define RX_MAX 1810
 #define RX_MIN 172
 #define RX_MID_POINT 992
-#define RX_DEADZONE_THRESH 30
 #define SWITCH_LOW_THRESHOLD 500
 #define SWITCH_HIGH_THRESHOLD 1500
-#define MAP_MAX 100
-#define MAP_MIN -100
+#define RX_DEADZONE_THRESH 30
+
+//RX CHANNEL DEFS
 #define RX_VERTICAL_CH 0
 #define RX_HORIZONTAL_CH 1
 #define RX_ARM 4
 
-//BUFFER DEFS
+//SWITCH POS DEFS
+#define SWITCH_LOW 0
+#define SWITCH_MID 1
+#define SWITCH_HIGH 2
+
+//MOTOR DEFS
+#define MAP_MAX 100
+#define MAP_MIN -100
+#define DUTY_CYCLE_MAX 2000
+#define DUTY_CYCLE_MIN 1000
+#define DUTY_CYCLE_THROTTLE_OFF 1488
+#define DUTY_CYCLE_DISARM 0 //THIS VAL MAYBE WRONG. TESTING REQUIRED
+
+//BUFFER FLAG DEFS
 #define ARM_FG 0
 #define RX_CON_FG 1
 #define RX_FAILSAFE_FG 2
@@ -59,26 +74,11 @@
 #define THROTTLE_FG 4
 
 
-#define SWITCH_LOW 0
-#define SWITCH_MID 1
-#define SWITCH_HIGH 2
 
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-void sendString(uint8_t* value, UART_HandleTypeDef *huart)
-{
-	HAL_UART_Transmit_IT(&huart, value, strlen(value));
-}
-
-void sendInt(uint16_t value, UART_HandleTypeDef *huart)
-{
-	char buffer[25];
-	itoa(value, buffer, strlen(buffer));
-	HAL_UART_Transmit_IT(&huart, buffer, strlen(buffer));
-}
-
 int position1Vals[50];
 int position2Vals[50];
 int position3Vals[50];
@@ -87,7 +87,7 @@ uint16_t ChannelVals[8];
 float MappedVals[8];
 int FlagBuffer[5];
 
-int MapToSwitch(uint16_t swVal)
+int MapRxToSwitch(uint16_t swVal)
 {
 	if(swVal < SWITCH_LOW_THRESHOLD)
 		return SWITCH_LOW;
@@ -97,11 +97,16 @@ int MapToSwitch(uint16_t swVal)
 		return SWITCH_MID;
 }
 
-float MapToPercent(uint16_t rxVal)
+float MapRxToPercent(uint16_t rxVal)
 {
 	float val = rxVal;
 	return ((((val - RX_MIN) * (MAP_MAX - MAP_MIN))
 			/ (RX_MAX - RX_MIN)) + MAP_MIN);
+}
+
+int MapPercentToMotor(float perVal)
+{
+
 }
 /* USER CODE END PM */
 
@@ -1202,7 +1207,7 @@ void Receive_Radio_Signal(void *argument)
 				ChannelVals[i] = sbus.PWM_US_RC_CH[i];
 			}
 
-			if(MapToSwitch(ChannelVals[RX_ARM]) == SWITCH_HIGH)
+			if(MapRxToSwitch(ChannelVals[RX_ARM]) == SWITCH_HIGH)
 				FlagBuffer[ARM_FG] = 1;
 
 

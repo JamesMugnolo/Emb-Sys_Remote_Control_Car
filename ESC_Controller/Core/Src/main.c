@@ -68,6 +68,11 @@
 #define DUTY_CYCLE_DISARM 0 //THIS VAL MAYBE WRONG. TESTING REQUIRED
 #define THROTTLE_SCALAR 0.5
 
+//BATTERY DEFS
+#define BAT_MAX_CELL_V 4.35
+#define BAT_LOW_CELL_V 3.5 //If under low V for longer than 1 second set BAT_LVL_FG
+#define BAT_MIN_CELL_V 3.2 //If ever goes under min set BAT_LVL_FG
+
 //BUFFER FLAG DEFS
 #define ARM_FG 0
 #define RX_CON_FG 1
@@ -115,7 +120,6 @@ float MapRxToPercent(uint16_t rxVal)
 		return ((((val - RX_MIN) * (MAP_MAX - MAP_MIN))
 					/ (RX_MAX - RX_MIN)) + MAP_MIN);
 	}
-
 }
 
 int MapPercentToMotor(float perVal)
@@ -152,6 +156,28 @@ int MapPercentToMotor(float perVal)
 		}
 	}
 	return retVal;
+}
+
+uint8_t CalcBatterySize(int volts)
+{
+	int batSize = 0;
+	if (volts > 2 * BAT_LOW_CELL_V)
+	{
+		if (volts < 2 * BAT_MAX_CELL_V)
+			batSize = 2;
+		else if (volts < 3 * BAT_MAX_CELL_V)
+			batSize = 3;
+		else if (volts < 4 * BAT_MAX_CELL_V)
+			batSize = 4;
+		else if (volts < 5 * BAT_MAX_CELL_V)
+			batSize = 5; //SHOULD NEVER USE A 5S BATTERY
+		else if (volts < 6 * BAT_MAX_CELL_V)
+			batSize = 6; //THE CURRENT ESC CAN'T HANDLE OVER 5S BATTERIES
+		else
+			//WE HAVE A PROBLEM
+	}
+	else
+		//Battery voltage is below minimum allowable size for ESC to operate
 }
 /* USER CODE END PM */
 

@@ -38,20 +38,42 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define RESISTOR_MAX 4095
-#define DUTY_CYCLE_MAX 2000
+
+
+//RX DEFS
 #define RX_MAX 1810
 #define RX_MIN 172
 #define RX_MID_POINT 992
+#define RX_SWITCH_LOW_THRESH 500
+#define RX_SWITCH_HIGH_THRESH 1500
 #define RX_DEADZONE_THRESH 30
-#define SWITCH_LOW_THRESHOLD 500
-#define SWITCH_HIGH_THRESHOLD 1500
-#define MAP_MAX 100
-#define MAP_MIN -100
+
+//RX CHANNEL DEFS
 #define RX_VERTICAL_CH 0
 #define RX_HORIZONTAL_CH 1
 #define RX_ARM 4
 
-//BUFFER DEFS
+//SWITCH POS DEFS
+#define MAP_SWITCH_LOW 0
+#define MAP_SWITCH_MID 1
+#define MAP_SWITCH_HIGH 2
+
+//MOTOR DEFS
+#define MAP_MAX 100
+#define MAP_MIN -100
+#define MAP_MID ((MAP_MAX + MAP_MIN) / 2)
+#define DUTY_CYCLE_MAX 2000
+#define DUTY_CYCLE_MIN 1000
+#define DUTY_CYCLE_THROTTLE_OFF 1488
+#define DUTY_CYCLE_DISARM 0 //THIS VAL MAYBE WRONG. TESTING REQUIRED
+#define THROTTLE_SCALAR 0.5
+
+//BATTERY DEFS
+#define BAT_MAX_CELL_V 4.35
+#define BAT_LOW_CELL_V 3.5 //If under low V for longer than 1 second set BAT_LVL_FG
+#define BAT_MIN_CELL_V 3.2 //If ever goes under min set BAT_LVL_FG
+
+//BUFFER FLAG DEFS
 #define ARM_FG 0
 #define RX_CON_FG 1
 #define RX_FAILSAFE_FG 2
@@ -59,49 +81,103 @@
 #define THROTTLE_FG 4
 
 
-#define SWITCH_LOW 0
-#define SWITCH_MID 1
-#define SWITCH_HIGH 2
 
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-void sendString(uint8_t* value, UART_HandleTypeDef *huart)
-{
-	HAL_UART_Transmit_IT(&huart, value, strlen(value));
-}
+int position1Vals[50];//debug
+int position2Vals[50];//debug
+int position3Vals[50];//debug
+int position4Vals[50];//debug
+uint16_t ChannelVals[8] = {RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT};//Value of inputs as radio. Values [RX_MIN, RX_MAX].
+float MappedVals[8] = {MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_MID};//Value of inputs as percentage. Values within MAP_* or SWITCH_*.
+int MotorVals[4] = {DUTY_CYCLE_DISARM,DUTY_CYCLE_DISARM,DUTY_CYCLE_DISARM,DUTY_CYCLE_DISARM};//2 or 4 size (how many signals). Length of duty cycle in microsec.
+bool FlagBuffer[5] = {0,0,0,0,0};//Flags! See *_FG defines.
 
-void sendInt(uint16_t value, UART_HandleTypeDef *huart)
+int MapRxToSwitch(uint16_t swVal)
 {
-	char buffer[25];
-	itoa(value, buffer, strlen(buffer));
-	HAL_UART_Transmit_IT(&huart, buffer, strlen(buffer));
-}
-
-int position1Vals[50];
-int position2Vals[50];
-int position3Vals[50];
-int position4Vals[50];
-uint16_t ChannelVals[8];
-float MappedVals[8];
-int FlagBuffer[5];
-
-int MapToSwitch(uint16_t swVal)
-{
-	if(swVal < SWITCH_LOW_THRESHOLD)
-		return SWITCH_LOW;
-	else if(swVal > SWITCH_HIGH_THRESHOLD)
-		return SWITCH_HIGH;
+	if(swVal < RX_SWITCH_LOW_THRESH)
+		return MAP_SWITCH_LOW;
+	else if(swVal > RX_SWITCH_HIGH_THRESH)
+		return MAP_SWITCH_HIGH;
 	else
-		return SWITCH_MID;
+		return MAP_SWITCH_MID;
 }
 
-float MapToPercent(uint16_t rxVal)
+float MapRxToPercent(uint16_t rxVal)
 {
 	float val = rxVal;
-	return ((((val - RX_MIN) * (MAP_MAX - MAP_MIN))
-			/ (RX_MAX - RX_MIN)) + MAP_MIN);
+
+	//if we are within deadzone
+	if (val <= (RX_MID_POINT + RX_DEADZONE_THRESH)
+			&& val >= (RX_MID_POINT - RX_DEADZONE_THRESH))
+	{
+		return 0;
+	}
+	else
+	{
+		return ((((val - RX_MIN) * (MAP_MAX - MAP_MIN))
+					/ (RX_MAX - RX_MIN)) + MAP_MIN);
+	}
+}
+
+int MapPercentToMotor(float perVal)
+{
+	int retVal = DUTY_CYCLE_DISARM;
+	//If any critical flag is unset, do not arm.
+	if (FlagBuffer[ARM_FG] && FlagBuffer[RX_CON_FG]
+		&& FlagBuffer[RX_FAILSAFE_FG] && FlagBuffer[BAT_LVL_FG])
+	{
+		float upperRange = DUTY_CYCLE_MAX - DUTY_CYCLE_THROTTLE_OFF;
+		float lowerRange = DUTY_CYCLE_THROTTLE_OFF - DUTY_CYCLE_MIN;
+		//If throttle scalar flag is set, normalize to scaled range.
+		if(FlagBuffer[THROTTLE_FG])
+		{
+			upperRange = upperRange * THROTTLE_SCALAR;
+			lowerRange = lowerRange * THROTTLE_SCALAR;
+		}
+		//If midpoint, turn off.
+		if(perVal == MAP_MID)
+		{
+			retVal = DUTY_CYCLE_THROTTLE_OFF;
+		}
+		//Reverse
+		else if(perVal < MAP_MID)
+		{
+			retVal = ((((perVal - MAP_MIN) * lowerRange)
+					/ (MAP_MID - MAP_MIN)) + DUTY_CYCLE_MIN);
+		}
+		//Forward
+		else
+		{
+			retVal = ((((perVal - MAP_MID) * upperRange)
+					/ (MAP_MAX - MAP_MID)) + DUTY_CYCLE_THROTTLE_OFF);
+		}
+	}
+	return retVal;
+}
+
+uint8_t CalcBatterySize(int volts)
+{
+	int batSize = 0;
+	if (volts > 2 * BAT_LOW_CELL_V)
+	{
+		if (volts < 2 * BAT_MAX_CELL_V)
+			batSize = 2;
+		else if (volts < 3 * BAT_MAX_CELL_V)
+			batSize = 3;
+		else if (volts < 4 * BAT_MAX_CELL_V)
+			batSize = 4;
+		else if (volts < 5 * BAT_MAX_CELL_V)
+			batSize = 5; //SHOULD NEVER USE A 5S BATTERY
+		else if (volts < 6 * BAT_MAX_CELL_V)
+			batSize = 6; //THE CURRENT ESC CAN'T HANDLE OVER 5S BATTERIES
+		else
+			//WE HAVE A PROBLEM
+	}
+	else
+		//Battery voltage is below minimum allowable size for ESC to operate
 }
 /* USER CODE END PM */
 
@@ -1168,11 +1244,10 @@ void StartDefaultTask(void *argument)
 /* USER CODE END Header_Receive_Radio_Signal */
 void Receive_Radio_Signal(void *argument)
 {
-  /* USER CODE BEGIN Receive_Radio_Signal */
-
-  /* Infinite loop */
-	 //char buffer[20];
-	  //itoa(motor1Val,buffer,10);
+	/* USER CODE BEGIN Receive_Radio_Signal */
+	/* Infinite loop */
+	//char buffer[20];
+	//itoa(motor1Val,buffer,10);
 	SBUS sbus;
 	sbus.arm = 0;
 	sbus.disarm = 0;
@@ -1181,10 +1256,10 @@ void Receive_Radio_Signal(void *argument)
 	FlagBuffer[RX_FAILSAFE_FG] = 0;
 	FlagBuffer[RX_ARM] = 0;
 	int count = 0;
-  for(;;)
-  {
-		if (RC_READ_SBUS(&huart7 ,&sbus)) {
-
+	for(;;)
+	{
+		if (RC_READ_SBUS(&huart7 ,&sbus))
+		{
 			//verifying that sbus is reading properly and we are connected(not failsafing)
 			//If we enter, we are connected now.
 			if(!FlagBuffer[RX_CON_FG]){
@@ -1202,11 +1277,8 @@ void Receive_Radio_Signal(void *argument)
 				ChannelVals[i] = sbus.PWM_US_RC_CH[i];
 			}
 
-			if(MapToSwitch(ChannelVals[RX_ARM]) == SWITCH_HIGH)
+			if(MapRxToSwitch(ChannelVals[RX_ARM]) == MAP_SWITCH_HIGH)
 				FlagBuffer[ARM_FG] = 1;
-
-
-
 
 			//debug stuff
 			position1Vals[count] = sbus.PWM_US_RC_CH[0];
@@ -1241,8 +1313,8 @@ void Receive_Radio_Signal(void *argument)
 			__NOP();
 		}
 		//end more debug stuff
-  }
-  /* USER CODE END Receive_Radio_Signal */
+	}
+	/* USER CODE END Receive_Radio_Signal */
 }
 
 /* USER CODE BEGIN Header_StartRadioToPercent */
@@ -1254,13 +1326,23 @@ void Receive_Radio_Signal(void *argument)
 /* USER CODE END Header_StartRadioToPercent */
 void StartRadioToPercent(void *argument)
 {
-  /* USER CODE BEGIN StartRadioToPercent */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END StartRadioToPercent */
+	/* USER CODE BEGIN StartRadioToPercent */
+	/* Infinite loop */
+	for(;;)
+	{
+		for (int i = 0; i < sizeof(ChannelVals); i++)
+		{
+			if (i < 4)
+			{
+				MappedVals[i] = MapRxToPercent(ChannelVals[i]);
+			}
+			else
+			{
+				MappedVals[i] = MapRxToSwitch(ChannelVals[i]);
+			}
+		}
+	}
+	/* USER CODE END StartRadioToPercent */
 }
 
 /**

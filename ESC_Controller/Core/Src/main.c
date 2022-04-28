@@ -26,7 +26,8 @@
 /* USER CODE BEGIN Includes */
 #include "stm32F413h_discovery_lcd.h"
 #include <stdbool.h>
-#include <rc_input_sbus.h>
+#include "stdio.h"
+#include "rc_input_sbus.h"
 #include "stm32f4xx_hal.h"
 /* USER CODE END Includes */
 
@@ -80,6 +81,15 @@
 #define BAT_LVL_FG 3
 #define THROTTLE_FG 4
 
+//ARRAY DEFS
+#define CHAN_VALS_SIZE 8
+#define MAP_VALS_SIZE 8
+#define MOTOR_VALS_SIZE 4
+#define FLAG_BUFF_SIZE 5
+
+//TIM DEFS
+#define RADIO_READ_PERIOD 20
+#define LCD_WRITE_PERIOD 3000
 
 
 /* USER CODE END PD */
@@ -90,12 +100,20 @@ int position1Vals[50];//debug
 int position2Vals[50];//debug
 int position3Vals[50];//debug
 int position4Vals[50];//debug
-char ChanBuffer[60];
+char MapBuffer1[20];
+char MapBuffer2[20];
+char MapBuffer3[20];
+char ChanBuffer1[20];
+char ChanBuffer2[20];
+char ChanBuffer3[20];
+char MotorBuffer1[20];
+char MotorBuffer2[20];
+char FlagBufferChar[20];
 
-uint16_t ChannelVals[8] = {RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT,RX_MID_POINT};//Value of inputs as radio. Values [RX_MIN, RX_MAX].
-float MappedVals[8] = {MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_MID};//Value of inputs as percentage. Values within MAP_* or SWITCH_*.
-int MotorVals[4] = {DUTY_CYCLE_DISARM,DUTY_CYCLE_DISARM,DUTY_CYCLE_DISARM,DUTY_CYCLE_DISARM};//2 or 4 size (how many signals). Length of duty cycle in microsec.
-bool FlagBuffer[5] = {0,0,0,0,0};//Flags! See *_FG defines.
+uint16_t ChannelVals[CHAN_VALS_SIZE] = {RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT};//Value of inputs as radio. Values [RX_MIN, RX_MAX].
+float MappedVals[MAP_VALS_SIZE] = {MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW};//Value of inputs as percentage. Values within MAP_* or SWITCH_*.
+int MotorVals[MOTOR_VALS_SIZE] = {DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM}; //2 or 4 size (how many signals). Length of duty cycle in microsec.
+bool FlagBuffer[FLAG_BUFF_SIZE] = {0, 0, 0, 1, 0};//Flags! See *_FG defines.
 
 bool CheckFlags()
 {
@@ -221,43 +239,53 @@ SRAM_HandleTypeDef hsram2;
 osThreadId_t Run_MotorsHandle;
 const osThreadAttr_t Run_Motors_attributes = {
   .name = "Run_Motors",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityNormal4,
   .stack_size = 128 * 4
 };
 /* Definitions for Radio_Receiver */
 osThreadId_t Radio_ReceiverHandle;
 const osThreadAttr_t Radio_Receiver_attributes = {
   .name = "Radio_Receiver",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityNormal7,
   .stack_size = 128 * 4
 };
 /* Definitions for Rx_Mapping */
 osThreadId_t Rx_MappingHandle;
 const osThreadAttr_t Rx_Mapping_attributes = {
   .name = "Rx_Mapping",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityNormal6,
   .stack_size = 128 * 4
 };
 /* Definitions for Battery_Monitor */
 osThreadId_t Battery_MonitorHandle;
 const osThreadAttr_t Battery_Monitor_attributes = {
   .name = "Battery_Monitor",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityNormal3,
   .stack_size = 128 * 4
 };
 /* Definitions for Data_To_LCD */
 osThreadId_t Data_To_LCDHandle;
 const osThreadAttr_t Data_To_LCD_attributes = {
   .name = "Data_To_LCD",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityNormal2,
   .stack_size = 128 * 4
 };
 /* Definitions for Map_To_Motors */
 osThreadId_t Map_To_MotorsHandle;
 const osThreadAttr_t Map_To_Motors_attributes = {
   .name = "Map_To_Motors",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityNormal5,
   .stack_size = 128 * 4
+};
+/* Definitions for RadioReadTim */
+osTimerId_t RadioReadTimHandle;
+const osTimerAttr_t RadioReadTim_attributes = {
+  .name = "RadioReadTim"
+};
+/* Definitions for LCDDelayTim */
+osTimerId_t LCDDelayTimHandle;
+const osTimerAttr_t LCDDelayTim_attributes = {
+  .name = "LCDDelayTim"
 };
 /* USER CODE BEGIN PV */
 uint16_t motor1Val;
@@ -289,6 +317,8 @@ void Start_Rx_Mapping(void *argument);
 void Start_Battery_Monitor(void *argument);
 void Start_Data_To_LCD(void *argument);
 void Start_Map_To_Motors(void *argument);
+void RadioReadTimCallBack(void *argument);
+void LCDDelayTimCallback(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -348,10 +378,11 @@ int main(void)
   BSP_LCD_SetFont(&Font16);
   BSP_LCD_SetTextColor(LCD_COLOR_RED);
   BSP_LCD_SetBackColor(LCD_COLOR_WHITE);
-  BSP_LCD_DisplayStringAtLine(1, "Hello");
+  //BSP_LCD_DisplayStringAtLine(1, "Hello");
   //BSP_LCD_DisplayStringAt(0, 112, (uint8_t*)"Starting Project...", CENTER_MODE);
   HAL_TIM_PWM_Start(&htim3,TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim3,TIM_CHANNEL_3);
+
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -365,8 +396,17 @@ int main(void)
   /* add semaphores, ... */
   /* USER CODE END RTOS_SEMAPHORES */
 
+  /* Create the timer(s) */
+  /* creation of RadioReadTim */
+  RadioReadTimHandle = osTimerNew(RadioReadTimCallBack, osTimerPeriodic, NULL, &RadioReadTim_attributes);
+
+  /* creation of LCDDelayTim */
+  LCDDelayTimHandle = osTimerNew(LCDDelayTimCallback, osTimerPeriodic, NULL, &LCDDelayTim_attributes);
+
   /* USER CODE BEGIN RTOS_TIMERS */
   /* start timers, add new ones, ... */
+  osTimerStart(RadioReadTimHandle, RADIO_READ_PERIOD);
+  osTimerStart(LCDDelayTimHandle, LCD_WRITE_PERIOD);
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
@@ -1260,7 +1300,7 @@ void Start_Run_Motors(void *argument)
   //uint16_t printVal;
   for(;;)
   {
-	  BSP_LCD_DisplayStringAtLine(2, "RUN MOTORS");
+	  //BSP_LCD_DisplayStringAtLine(2, "RUN MOTORS");
 	  //HAL_ADC_Start(&hadc1);
 	  //HAL_ADC_PollForConversion(&hadc1,50);
 	  //resistorVal = HAL_ADC_GetValue(&hadc1);
@@ -1272,7 +1312,8 @@ void Start_Run_Motors(void *argument)
 	  //BSP_LCD_DisplayStringAtLine(1, buffer);
 	  //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_3,motor1Val);
 	  //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,motor1Val);
-	  osDelay(500);
+	  osThreadSuspend(Run_MotorsHandle);
+	  //osDelay(5000);
   }
   /* USER CODE END 5 */
 }
@@ -1301,7 +1342,7 @@ void Receive_Radio_Signal(void *argument)
 	for(;;)
 	{
 		//BSP_LCD_ClearStringLine(3);
-		BSP_LCD_DisplayStringAtLine(3, "RECEIVE RADIO");
+		//BSP_LCD_DisplayStringAtLine(3, "RECEIVE RADIO");
 		if (RC_READ_SBUS(&huart7 ,&sbus))
 		{
 			//verifying that sbus is reading properly and we are connected(not failsafing)
@@ -1317,7 +1358,7 @@ void Receive_Radio_Signal(void *argument)
 			}
 
 
-			for(int i = 0; i < sizeof(ChannelVals); i++ ) {
+			for(int i = 0; i < CHAN_VALS_SIZE; i++ ) {
 				ChannelVals[i] = sbus.PWM_US_RC_CH[i];
 			}
 
@@ -1359,7 +1400,8 @@ void Receive_Radio_Signal(void *argument)
 			__NOP();
 		}
 		//end more debug stuff
-		osDelay(500);
+		osThreadSuspend(Radio_ReceiverHandle);
+		//osDelay(5000);
 	}
   /* USER CODE END Receive_Radio_Signal */
 }
@@ -1377,11 +1419,10 @@ void Start_Rx_Mapping(void *argument)
 	/* Infinite loop */
 	for(;;)
 	{
-		BSP_LCD_ClearStringLine(4);
-		BSP_LCD_DisplayStringAtLine(4, "RX MAPPING");
+		//BSP_LCD_DisplayStringAtLine(4, "RX MAPPING");
 		if(CheckFlags())
 		{
-			for(int i = 0; i < 8; i++ ) {
+			for(int i = 0; i < MAP_VALS_SIZE; i++ ) {
 				if(i < 4) //First 4 channels are sticks, all others are switches
 					MappedVals[i] = MapRxToPercent(ChannelVals[i]);
 				else
@@ -1398,8 +1439,9 @@ void Start_Rx_Mapping(void *argument)
 					MappedVals[i] = MAP_SWITCH_LOW;
 			}
 		}
-		//TODO:CALL MAP_TO_MOTOR WHEN VALUES CHANGE*/
-		osDelay(500);
+		//TODO:CALL MAP_TO_MOTOR WHEN VALUES CHANGE
+		osThreadSuspend(Rx_MappingHandle);
+		//osDelay(5000);
 	}
   /* USER CODE END Start_Rx_Mapping */
 }
@@ -1417,9 +1459,10 @@ void Start_Battery_Monitor(void *argument)
 	/* Infinite loop */
 	for(;;)
 	{
-		BSP_LCD_DisplayStringAtLine(5, "BATTERY");
+		//BSP_LCD_DisplayStringAtLine(5, "BATTERY");
 		//__NOP();
-		osDelay(500);
+		osThreadSuspend(Battery_MonitorHandle);
+		//osDelay(5000);
 	}
   /* USER CODE END Start_Battery_Monitor */
 }
@@ -1435,33 +1478,60 @@ void Start_Data_To_LCD(void *argument)
 {
   /* USER CODE BEGIN Start_Data_To_LCD */
   /* Infinite loop */
-	  //HAL_ADC_Start(&hadc1);
-	  //HAL_ADC_PollForConversion(&hadc1,50);
-	  //resistorVal = HAL_ADC_GetValue(&hadc1);
-	  //motor1Val = (DUTY_CYCLE_MAX * resistorVal) / RESISTOR_MAX;
-	  //BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
-	  //BSP_LCD_DisplayStringAtLine(1, buffer);
-	  //itoa(motor1Val,buffer,10);
-	  //BSP_LCD_SetTextColor(LCD_COLOR_RED);
-	  //BSP_LCD_DisplayStringAtLine(1, buffer);
-	  //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_3,motor1Val);
-	  //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,motor1Val);
 	BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
 	for(;;)
 	{
-		BSP_LCD_DisplayStringAtLine(6, "LCD");
-/*		BSP_LCD_ClearStringLine(1);
-		//sprintf(ChanBuffer, "ChanVals: 1:%04d, 2:%04d, 3:%04d, 4:%04d, 5:%04d", ChannelVals[0], ChannelVals[1], ChannelVals[2], ChannelVals[3], ChannelVals[4]);
-		BSP_LCD_DisplayStringAtLine(1, ChanBuffer);
+		//TODO: new order to display
+		//Flags -> battery level -> motor values
 
-		BSP_LCD_ClearStringLine(3);
-		//sprintf(ChanBuffer, "MappVals: 1:%04d, 2:%04d, 3:%04d, 4:%04d, 5:%04d", MappedVals[0], MappedVals[1], MappedVals[2], MappedVals[3], MappedVals[4]);
-		BSP_LCD_DisplayStringAtLine(3, ChanBuffer);
 
-		BSP_LCD_ClearStringLine(5);
-		//sprintf(ChanBuffer, "MotorVals: 1:%04d, 2:%04d, 3:%04d, 4:%04d", MotorVals[0], MotorVals[1], MotorVals[2], MotorVals[3]);
-		BSP_LCD_DisplayStringAtLine(5, ChanBuffer);*/
-		osDelay(500);
+/*		//Clearing
+		BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+		BSP_LCD_DisplayStringAtLine(0, ChanBuffer1);
+		BSP_LCD_DisplayStringAtLine(1, ChanBuffer2);
+		BSP_LCD_DisplayStringAtLine(2, ChanBuffer3);
+
+		BSP_LCD_DisplayStringAtLine(4, MapBuffer1);
+		BSP_LCD_DisplayStringAtLine(5, MapBuffer2);
+		BSP_LCD_DisplayStringAtLine(6, MapBuffer3);
+
+		BSP_LCD_DisplayStringAtLine(8, "MotorVals:");
+		BSP_LCD_DisplayStringAtLine(9, MotorBuffer1);
+		BSP_LCD_DisplayStringAtLine(10, MotorBuffer2);
+
+		BSP_LCD_DisplayStringAtLine(12, FlagBufferChar);*/
+
+
+		sprintf(ChanBuffer1, "ChanVals: 1:%04d", ChannelVals[0]);
+		sprintf(ChanBuffer2, "2:%04d 3:%04d", ChannelVals[1], ChannelVals[2]);
+		sprintf(ChanBuffer3, "4:%04d 5:%04d", ChannelVals[3], ChannelVals[4]);
+
+		sprintf(MapBuffer1, "MappedVals: 1:%04d", (int)MappedVals[0]);
+		sprintf(MapBuffer2, "2:%04d 3:%04d", (int)MappedVals[1], (int)MappedVals[2]);
+		sprintf(MapBuffer3, "4:%04d 5:%04d", (int)MappedVals[3], (int)MappedVals[4]);
+
+		sprintf(MotorBuffer1, "1:%04d 2:%04d", MotorVals[0], MotorVals[1]);
+		sprintf(MotorBuffer2, "3:%04d 4:%04d", MotorVals[2], MotorVals[3]);
+
+		sprintf(FlagBufferChar, "FgBuf:[%1d,%1d,%1d,%1d,%1d]", FlagBuffer[0], FlagBuffer[1], FlagBuffer[2], FlagBuffer[3], FlagBuffer[4]);
+
+		BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
+		BSP_LCD_DisplayStringAtLine(0, ChanBuffer1);
+		BSP_LCD_DisplayStringAtLine(1, ChanBuffer2);
+		BSP_LCD_DisplayStringAtLine(2, ChanBuffer3);
+
+		BSP_LCD_DisplayStringAtLine(4, MapBuffer1);
+		BSP_LCD_DisplayStringAtLine(5, MapBuffer2);
+		BSP_LCD_DisplayStringAtLine(6, MapBuffer3);
+
+		BSP_LCD_DisplayStringAtLine(8, "MotorVals:");
+		BSP_LCD_DisplayStringAtLine(9, MotorBuffer1);
+		BSP_LCD_DisplayStringAtLine(10, MotorBuffer2);
+
+		BSP_LCD_DisplayStringAtLine(12, FlagBufferChar);
+
+		osThreadSuspend(Data_To_LCDHandle);
+		//osDelay(5000);
 	}
   /* USER CODE END Start_Data_To_LCD */
 }
@@ -1479,14 +1549,35 @@ void Start_Map_To_Motors(void *argument)
 	/* Infinite loop */
 	for(;;)
 	{
-		BSP_LCD_DisplayStringAtLine(7, "MAP MOTORS");
-/*		for(int i = 0; i < sizeof(MotorVals); i++)
+		//BSP_LCD_DisplayStringAtLine(7, "MAP MOTORS");
+		for(int i = 0; i < MOTOR_VALS_SIZE; i++)
 		{
 			MotorVals[i] = MapPercentToMotor(MappedVals[i]);
-		}*/
-		osDelay(500);
+		}
+		//BSP_LCD_DisplayStringAtLine(7, "MAP MOTORS");
+		osThreadSuspend(Map_To_MotorsHandle);
+		//osDelay(5000);
 	}
   /* USER CODE END Start_Map_To_Motors */
+}
+
+/* RadioReadTimCallBack function */
+void RadioReadTimCallBack(void *argument)
+{
+  /* USER CODE BEGIN RadioReadTimCallBack */
+	osThreadResume(Radio_ReceiverHandle);
+	osThreadResume(Rx_MappingHandle);
+	osThreadResume(Map_To_MotorsHandle);
+	osThreadResume(Run_MotorsHandle);
+  /* USER CODE END RadioReadTimCallBack */
+}
+
+/* LCDDelayTimCallback function */
+void LCDDelayTimCallback(void *argument)
+{
+  /* USER CODE BEGIN LCDDelayTimCallback */
+	osThreadResume(Data_To_LCDHandle);
+  /* USER CODE END LCDDelayTimCallback */
 }
 
 /**

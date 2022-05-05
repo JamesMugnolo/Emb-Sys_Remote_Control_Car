@@ -47,11 +47,12 @@
 #define RX_MID_POINT 992
 #define RX_SWITCH_LOW_THRESH 500
 #define RX_SWITCH_HIGH_THRESH 1500
-#define RX_DEADZONE_THRESH 30
+#define RX_DEADZONE_THRESH 50
+#define RX_MAX_DIF_PER_FRAME 50
 
 //RX CHANNEL DEFS
-#define RX_VERTICAL_CH 0
-#define RX_HORIZONTAL_CH 1
+#define RX_VERTICAL_CH 1
+#define RX_HORIZONTAL_CH 0
 #define RX_ARM 4
 
 //SWITCH POS DEFS
@@ -66,8 +67,8 @@
 #define DUTY_CYCLE_MAX 2000
 #define DUTY_CYCLE_MIN 1000
 #define DUTY_CYCLE_THROTTLE_OFF 1488
-#define DUTY_CYCLE_DISARM 0 //THIS VAL MAYBE WRONG. TESTING REQUIRED
-#define THROTTLE_SCALAR 0.5
+#define DUTY_CYCLE_DISARM 1000 //THIS VAL MAYBE WRONG. TESTING REQUIRED
+#define THROTTLE_SCALAR 0.1
 
 //BATTERY DEFS
 #define BAT_MAX_CELL_V 4.35
@@ -88,7 +89,7 @@
 #define FLAG_BUFF_SIZE 5
 
 //TIM DEFS
-#define RADIO_READ_PERIOD 20
+#define RADIO_READ_PERIOD 50
 #define LCD_WRITE_PERIOD 3000
 
 
@@ -96,10 +97,6 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-int position1Vals[50];//debug
-int position2Vals[50];//debug
-int position3Vals[50];//debug
-int position4Vals[50];//debug
 char MapBuffer1[20];
 char MapBuffer2[20];
 char MapBuffer3[20];
@@ -110,15 +107,31 @@ char MotorBuffer1[20];
 char MotorBuffer2[20];
 char FlagBufferChar[20];
 
+uint16_t lastFewFrames[2][4] = {{RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT}, {RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT}};
+int count = 0;
+
 uint16_t ChannelVals[CHAN_VALS_SIZE] = {RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT};//Value of inputs as radio. Values [RX_MIN, RX_MAX].
 float MappedVals[MAP_VALS_SIZE] = {MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW};//Value of inputs as percentage. Values within MAP_* or SWITCH_*.
 int MotorVals[MOTOR_VALS_SIZE] = {DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM}; //2 or 4 size (how many signals). Length of duty cycle in microsec.
-bool FlagBuffer[FLAG_BUFF_SIZE] = {0, 0, 0, 1, 0};//Flags! See *_FG defines.
+bool FlagBuffer[FLAG_BUFF_SIZE] = {0, 0, 0, 1, 1};//Flags! See *_FG defines.
 
 bool CheckFlags()
 {
 	return FlagBuffer[ARM_FG] && FlagBuffer[RX_CON_FG]
 		&& FlagBuffer[RX_FAILSAFE_FG] && FlagBuffer[BAT_LVL_FG];
+}
+
+bool CheckValidFrame(int channel)
+{
+	if((lastFewFrames[0][channel] + RX_MAX_DIF_PER_FRAME) <  lastFewFrames[1][channel])
+	{
+		return false;
+	}
+	if((lastFewFrames[0][channel] - RX_MAX_DIF_PER_FRAME) >  lastFewFrames[1][channel])
+	{
+		return false;
+	}
+	return true;
 }
 
 int MapRxToSwitch(uint16_t swVal)
@@ -170,8 +183,8 @@ int MapPercentToMotor(float perVal)
 		//Reverse
 		else if(perVal < MAP_MID)
 		{
-			retVal = ((((perVal - MAP_MIN) * lowerRange)
-					/ (MAP_MID - MAP_MIN)) + DUTY_CYCLE_MIN);
+			retVal = (DUTY_CYCLE_THROTTLE_OFF - (((perVal * -1)) * lowerRange)
+					/ (MAP_MID - MAP_MIN));
 		}
 		//Forward
 		else
@@ -287,6 +300,11 @@ osTimerId_t LCDDelayTimHandle;
 const osTimerAttr_t LCDDelayTim_attributes = {
   .name = "LCDDelayTim"
 };
+/* Definitions for RxInputMutex */
+osMutexId_t RxInputMutexHandle;
+const osMutexAttr_t RxInputMutex_attributes = {
+  .name = "RxInputMutex"
+};
 /* USER CODE BEGIN PV */
 uint16_t motor1Val;
 uint16_t horizontalPos;
@@ -387,6 +405,9 @@ int main(void)
 
   /* Init scheduler */
   osKernelInitialize();
+  /* Create the mutex(es) */
+  /* creation of RxInputMutex */
+  RxInputMutexHandle = osMutexNew(&RxInputMutex_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -1310,8 +1331,8 @@ void Start_Run_Motors(void *argument)
 	  //itoa(motor1Val,buffer,10);
 	  //BSP_LCD_SetTextColor(LCD_COLOR_RED);
 	  //BSP_LCD_DisplayStringAtLine(1, buffer);
-	  //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_3,motor1Val);
-	  //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2,motor1Val);
+	  __HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_3, MotorVals[RX_VERTICAL_CH]);
+	  __HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_2, MotorVals[RX_HORIZONTAL_CH]);
 	  osThreadSuspend(Run_MotorsHandle);
 	  //osDelay(5000);
   }
@@ -1338,11 +1359,13 @@ void Receive_Radio_Signal(void *argument)
 	FlagBuffer[RX_CON_FG] = 0;
 	FlagBuffer[RX_FAILSAFE_FG] = 0;
 	FlagBuffer[RX_ARM] = 0;
-	int count = 0;
+	FlagBuffer[THROTTLE_FG] = 1;
+
 	for(;;)
 	{
 		//BSP_LCD_ClearStringLine(3);
 		//BSP_LCD_DisplayStringAtLine(3, "RECEIVE RADIO");
+		osStatus_t status = osMutexAcquire(RxInputMutexHandle,osWaitForever);
 		if (RC_READ_SBUS(&huart7 ,&sbus))
 		{
 			//verifying that sbus is reading properly and we are connected(not failsafing)
@@ -1359,6 +1382,8 @@ void Receive_Radio_Signal(void *argument)
 
 
 			for(int i = 0; i < CHAN_VALS_SIZE; i++ ) {
+			//	if(i < 4)
+				//	lastFewFrames[count][i] = sbus.PWM_US_RC_CH[i];
 				ChannelVals[i] = sbus.PWM_US_RC_CH[i];
 			}
 
@@ -1367,39 +1392,13 @@ void Receive_Radio_Signal(void *argument)
 			else
 				FlagBuffer[ARM_FG] = false;
 
-			//debug stuff
-			position1Vals[count] = sbus.PWM_US_RC_CH[0];
-			position2Vals[count] = sbus.PWM_US_RC_CH[1];
-			position3Vals[count] = sbus.PWM_US_RC_CH[2];
-			position4Vals[count] = sbus.PWM_US_RC_CH[3];
-			count++;
-			//end debug stuff
+			count = (count + 1) % 2;
 	  	}
 		//Too many frames without connection.
 		else if(sbus.error) {
 			FlagBuffer[RX_CON_FG] = 0;
 		}
-
-		//more debug stuff
-		if(count >= 50) {
-			count = 0;
-			int tot1 = 0;
-			int tot2 = 0;
-			int tot3 = 0;
-			int tot4 = 0;
-			for(int i=0; i< 50; i++) {
-				tot1 += position1Vals[i];
-				tot2 += position2Vals[i];
-				tot3 += position3Vals[i];
-				tot4 += position4Vals[i];
-			}
-			tot1 = tot1 / 50;
-			tot2 = tot2 / 50;
-			tot3 = tot3 / 50;
-			tot4 = tot4 / 50;
-			__NOP();
-		}
-		//end more debug stuff
+		status = osMutexRelease(RxInputMutexHandle);
 		osThreadSuspend(Radio_ReceiverHandle);
 		//osDelay(5000);
 	}
@@ -1423,10 +1422,11 @@ void Start_Rx_Mapping(void *argument)
 		if(CheckFlags())
 		{
 			for(int i = 0; i < MAP_VALS_SIZE; i++ ) {
-				if(i < 4) //First 4 channels are sticks, all others are switches
+				if(i < 4 && CheckValidFrame(i)) //First 4 channels are sticks, all others are switches
 					MappedVals[i] = MapRxToPercent(ChannelVals[i]);
-				else
+				else if(i >= 4)
 					MappedVals[i] = MapRxToSwitch(ChannelVals[i]);
+				//else keep the last value
 			}
 		}
 		else //Flags are not good, set values to safe values

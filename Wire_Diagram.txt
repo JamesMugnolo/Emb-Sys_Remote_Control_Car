@@ -4,3 +4,23 @@ Green/Blue - ESC input for main plug
 Orange/Red - 5v 
 Yellow - battery monitoring (reduced voltage)
 green - UART 3plug 
+
+Pins
+TIM3_CH2	PB5	D11
+TIM3_CH3	PB0	D6
+UART7_RX	PF6	D0
+GND	GND
+ADC1	PC0	A0	Channel10	SamplingTime 3Cycles
+
+
+
+
+ADC Polling settings
+ADC1
+	ARD_A1	ARD_A2	ARD_A3	ADC1_IN9	ARD_A0	ARD_A5
+	PA1		PA2		PA5		PB1			PC0		PC4
+	IN1		IN2		IN5		IN9			IN10	IN14
+	guide uses ADC1_IN7 PA7
+	ADC_Regular_ConversionMode
+		Channel: Channel 10			guide uses 7
+		Sampling Time: 3 Cycle		guide uses 1.5

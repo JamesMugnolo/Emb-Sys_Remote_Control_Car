@@ -40,7 +40,6 @@
 /* USER CODE BEGIN PD */
 #define RESISTOR_MAX 4095
 
-
 //RX DEFS
 #define RX_MAX 1810
 #define RX_MIN 172
@@ -67,13 +66,16 @@
 #define DUTY_CYCLE_MAX 2000
 #define DUTY_CYCLE_MIN 1000
 #define DUTY_CYCLE_THROTTLE_OFF 1488
-#define DUTY_CYCLE_DISARM 1000 //THIS VAL MAYBE WRONG. TESTING REQUIRED
+#define DUTY_CYCLE_DISARM 1488 //THIS VAL MAYBE WRONG. TESTING REQUIRED
 #define THROTTLE_SCALAR 0.1
 
 //BATTERY DEFS
 #define BAT_MAX_CELL_V 4.35
 #define BAT_LOW_CELL_V 3.5 //If under low V for longer than 1 second set BAT_LVL_FG
 #define BAT_MIN_CELL_V 3.2 //If ever goes under min set BAT_LVL_FG
+#define BOARD_SUPPLY_V 3.3 //probably used as Reference Voltage for ADC
+#define ADC_MAX_VAL 4095
+#define VOLTAGE_MULTIPLIER 5.7 //(r1 + r2) / r2 = (47000 + 10000) / 10000
 
 //BUFFER FLAG DEFS
 #define ARM_FG 0
@@ -91,8 +93,6 @@
 //TIM DEFS
 #define RADIO_READ_PERIOD 50
 #define LCD_WRITE_PERIOD 3000
-
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -110,113 +110,20 @@ char FlagBufferChar[20];
 uint16_t lastFewFrames[2][4] = {{RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT}, {RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT}};
 int count = 0;
 
+//Current Values
 uint16_t ChannelVals[CHAN_VALS_SIZE] = {RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT};//Value of inputs as radio. Values [RX_MIN, RX_MAX].
 float MappedVals[MAP_VALS_SIZE] = {MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW};//Value of inputs as percentage. Values within MAP_* or SWITCH_*.
 int MotorVals[MOTOR_VALS_SIZE] = {DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM}; //2 or 4 size (how many signals). Length of duty cycle in microsec.
 bool FlagBuffer[FLAG_BUFF_SIZE] = {0, 0, 0, 1, 1};//Flags! See *_FG defines.
+float AnalogInputVoltage = 0.0;
 
-bool CheckFlags()
-{
-	return FlagBuffer[ARM_FG] && FlagBuffer[RX_CON_FG]
-		&& FlagBuffer[RX_FAILSAFE_FG] && FlagBuffer[BAT_LVL_FG];
-}
-
-bool CheckValidFrame(int channel)
-{
-	if((lastFewFrames[0][channel] + RX_MAX_DIF_PER_FRAME) <  lastFewFrames[1][channel])
-	{
-		return false;
-	}
-	if((lastFewFrames[0][channel] - RX_MAX_DIF_PER_FRAME) >  lastFewFrames[1][channel])
-	{
-		return false;
-	}
-	return true;
-}
-
-int MapRxToSwitch(uint16_t swVal)
-{
-	if(swVal < RX_SWITCH_LOW_THRESH)
-		return MAP_SWITCH_LOW;
-	else if(swVal > RX_SWITCH_HIGH_THRESH)
-		return MAP_SWITCH_HIGH;
-	else
-		return MAP_SWITCH_MID;
-}
-
-float MapRxToPercent(uint16_t rxVal)
-{
-	float val = rxVal;
-
-	//if we are within deadzone
-	if (val <= (RX_MID_POINT + RX_DEADZONE_THRESH)
-			&& val >= (RX_MID_POINT - RX_DEADZONE_THRESH))
-	{
-		return 0;
-	}
-	else
-	{
-		return ((((val - RX_MIN) * (MAP_MAX - MAP_MIN))
-					/ (RX_MAX - RX_MIN)) + MAP_MIN);
-	}
-}
-
-int MapPercentToMotor(float perVal)
-{
-	int retVal = DUTY_CYCLE_DISARM;
-	//If any critical flag is unset, do not arm.
-	if (CheckFlags())
-	{
-		float upperRange = DUTY_CYCLE_MAX - DUTY_CYCLE_THROTTLE_OFF;
-		float lowerRange = DUTY_CYCLE_THROTTLE_OFF - DUTY_CYCLE_MIN;
-		//If throttle scalar flag is set, normalize to scaled range.
-		if(FlagBuffer[THROTTLE_FG])
-		{
-			upperRange = upperRange * THROTTLE_SCALAR;
-			lowerRange = lowerRange * THROTTLE_SCALAR;
-		}
-		//If midpoint, turn off.
-		if(perVal == MAP_MID)
-		{
-			retVal = DUTY_CYCLE_THROTTLE_OFF;
-		}
-		//Reverse
-		else if(perVal < MAP_MID)
-		{
-			retVal = (DUTY_CYCLE_THROTTLE_OFF - (((perVal * -1)) * lowerRange)
-					/ (MAP_MID - MAP_MIN));
-		}
-		//Forward
-		else
-		{
-			retVal = ((((perVal - MAP_MID) * upperRange)
-					/ (MAP_MAX - MAP_MID)) + DUTY_CYCLE_THROTTLE_OFF);
-		}
-	}
-	return retVal;
-}
-
-uint8_t CalcBatterySize(int volts)
-{
-	uint8_t batSize = 0;
-	if (volts > 2 * BAT_LOW_CELL_V)
-	{
-		if (volts < 2 * BAT_MAX_CELL_V)
-			batSize = 2;
-		else if (volts < 3 * BAT_MAX_CELL_V)
-			batSize = 3;
-		else if (volts < 4 * BAT_MAX_CELL_V)
-			batSize = 4;
-		else if (volts < 5 * BAT_MAX_CELL_V)
-			batSize = 5; //SHOULD NEVER USE A 5S BATTERY
-		else if (volts < 6 * BAT_MAX_CELL_V)
-			batSize = 6; //THE CURRENT ESC CAN'T HANDLE OVER 5S BATTERIES
-		else {} //WE HAVE A PROBLEM
-
-	}
-	else {} //Battery voltage is below minimum allowable size for ESC to operate
-
-}
+//Previous Values
+uint16_t PrevChannelVals[CHAN_VALS_SIZE] = {RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT};//Value of inputs as radio. Values [RX_MIN, RX_MAX].
+float PrevMappedVals[MAP_VALS_SIZE] = {MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW};//Value of inputs as percentage. Values within MAP_* or SWITCH_*.
+int PrevMotorVals[MOTOR_VALS_SIZE] = {DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM}; //2 or 4 size (how many signals). Length of duty cycle in microsec.
+bool PrevFlagBuffer[FLAG_BUFF_SIZE] = {0, 0, 0, 1, 1};//Flags! See *_FG defines.
+uint16_t PrevAnalogInputVoltage = 0;
+bool LCDFirstPrint = 1;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -339,11 +246,151 @@ void RadioReadTimCallBack(void *argument);
 void LCDDelayTimCallback(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+uint16_t Get_ADC_Voltage(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+bool CheckFlags()
+{
+	return FlagBuffer[ARM_FG] && FlagBuffer[RX_CON_FG]
+		&& FlagBuffer[RX_FAILSAFE_FG] && FlagBuffer[BAT_LVL_FG];
+}
+
+bool CheckValidFrame(int channel)
+{
+	if((lastFewFrames[0][channel] + RX_MAX_DIF_PER_FRAME) <  lastFewFrames[1][channel])
+	{
+		return false;
+	}
+	if((lastFewFrames[0][channel] - RX_MAX_DIF_PER_FRAME) >  lastFewFrames[1][channel])
+	{
+		return false;
+	}
+	return true;
+}
+
+int MapRxToSwitch(uint16_t swVal)
+{
+	if(swVal < RX_SWITCH_LOW_THRESH)
+		return MAP_SWITCH_LOW;
+	else if(swVal > RX_SWITCH_HIGH_THRESH)
+		return MAP_SWITCH_HIGH;
+	else
+		return MAP_SWITCH_MID;
+}
+
+float MapRxToPercent(uint16_t rxVal)
+{
+	float val = rxVal;
+
+	//if we are within deadzone
+	if (val <= (RX_MID_POINT + RX_DEADZONE_THRESH)
+			&& val >= (RX_MID_POINT - RX_DEADZONE_THRESH))
+	{
+		return 0;
+	}
+	else
+	{
+		return ((((val - RX_MIN) * (MAP_MAX - MAP_MIN))
+					/ (RX_MAX - RX_MIN)) + MAP_MIN);
+	}
+}
+
+int MapPercentToMotor(float perVal)
+{
+	int retVal = DUTY_CYCLE_DISARM;
+	//If any critical flag is unset, do not arm.
+	if (CheckFlags())
+	{
+		float upperRange = DUTY_CYCLE_MAX - DUTY_CYCLE_THROTTLE_OFF;
+		float lowerRange = DUTY_CYCLE_THROTTLE_OFF - DUTY_CYCLE_MIN;
+		//If throttle scalar flag is set, normalize to scaled range.
+		if(FlagBuffer[THROTTLE_FG])
+		{
+			upperRange = upperRange * THROTTLE_SCALAR;
+			lowerRange = lowerRange * THROTTLE_SCALAR;
+		}
+		//If midpoint, turn off.
+		if(perVal == MAP_MID)
+		{
+			retVal = DUTY_CYCLE_THROTTLE_OFF;
+		}
+		//Reverse
+		else if(perVal < MAP_MID)
+		{
+			retVal = (DUTY_CYCLE_THROTTLE_OFF - (((perVal * -1)) * lowerRange)
+					/ (MAP_MID - MAP_MIN));
+		}
+		//Forward
+		else
+		{
+			retVal = ((((perVal - MAP_MID) * upperRange)
+					/ (MAP_MAX - MAP_MID)) + DUTY_CYCLE_THROTTLE_OFF);
+		}
+	}
+	return retVal;
+}
+
+uint8_t CalcBatterySize(int volts)
+{
+	uint8_t batSize = 0;
+	if (volts > 2 * BAT_LOW_CELL_V)
+	{
+		if (volts < 2 * BAT_MAX_CELL_V)
+			batSize = 2;
+		else if (volts < 3 * BAT_MAX_CELL_V)
+			batSize = 3;
+		else if (volts < 4 * BAT_MAX_CELL_V)
+			batSize = 4;
+		else if (volts < 5 * BAT_MAX_CELL_V)
+			batSize = 5; //SHOULD NEVER USE A 5S BATTERY
+		else if (volts < 6 * BAT_MAX_CELL_V)
+			batSize = 6; //THE CURRENT ESC CAN'T HANDLE OVER 5S BATTERIES
+		else {} //WE HAVE A PROBLEM
+
+	}
+	else {} //Battery voltage is below minimum allowable size for ESC to operate
+	return batSize;
+}
+
+float FindAnalogInputVoltage()
+{
+	/* Full exerpt from stm32f413zh-datasheet.pdf Analog-to-digital converter (ADC)
+	One 12-bit analog-to-digital converter is embedded and shares up to 16 external channels,
+	performing conversions in the single-shot or scan mode. In scan mode, automatic
+	conversion is performed on a selected group of analog inputs.
+	The ADC can be served by the DMA controller. An analog watchdog feature allows very
+	precise monitoring of the converted voltage of one, some or all selected channels. An
+	interrupt is generated when the converted voltage is outside the programmed thresholds.
+	To synchronize A/D conversion and timers, the ADCs could be triggered by any of TIM1,
+	TIM2, TIM3, TIM4 or TIM5 timer. */
+	//Digital Output = ((2^N) * Analog Input Voltage) / Reference Voltage
+	//12 bit ADC, N=12.	//Query the Digital Output from ADC.	//Find the (approximate) Analog Input Voltage.
+
+	uint16_t adcDigitalValue = Get_ADC_Voltage();//HAL_ADC_GetValue(&hadc1); //12 bits. Query ADC for Digital Output.	//Any masking required on the Digital Value?
+	if (adcDigitalValue == 0)
+	{	//divide by zero error prevention
+		AnalogInputVoltage = 0;
+	}
+	else
+	{
+		AnalogInputVoltage = ((float)(adcDigitalValue * BOARD_SUPPLY_V) / ADC_MAX_VAL) * VOLTAGE_MULTIPLIER;
+	}
+	return AnalogInputVoltage;
+	//vin = vout * (r1 + r2) / r2
+	//
+}
+
+uint16_t Get_ADC_Voltage()
+{
+	//Why? IDK. https://deepbluembedded.com/stm32-adc-read-example-dma-interrupt-polling/
+	HAL_ADC_Start(&hadc1);
+	HAL_ADC_PollForConversion(&hadc1, 10);//timeout arbitrary
+	uint16_t val = HAL_ADC_GetValue(&hadc1);
+	TIM3->CCR1 = (val<<4);//!< TIM capture/compare register 1, Address offset: 0x34
+	return val;
+}
 /* USER CODE END 0 */
 
 /**
@@ -1363,6 +1410,7 @@ void Receive_Radio_Signal(void *argument)
 
 	for(;;)
 	{
+		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_5);
 		//BSP_LCD_ClearStringLine(3);
 		//BSP_LCD_DisplayStringAtLine(3, "RECEIVE RADIO");
 		osStatus_t status = osMutexAcquire(RxInputMutexHandle,osWaitForever);
@@ -1421,13 +1469,32 @@ void Start_Rx_Mapping(void *argument)
 		//BSP_LCD_DisplayStringAtLine(4, "RX MAPPING");
 		if(CheckFlags())
 		{
-			for(int i = 0; i < MAP_VALS_SIZE; i++ ) {
-				if(i < 4 && CheckValidFrame(i)) //First 4 channels are sticks, all others are switches
-					MappedVals[i] = MapRxToPercent(ChannelVals[i]);
-				else if(i >= 4)
-					MappedVals[i] = MapRxToSwitch(ChannelVals[i]);
-				//else keep the last value
+				//code
+			float HorPercentVal = MapRxToPercent(ChannelVals[RX_HORIZONTAL_CH]); // get mapped horizontal chan val
+			float VertPercentVal = MapRxToPercent(ChannelVals[RX_VERTICAL_CH]); // get mapped vert chan val
+			float MotorSetLeft = 0;
+			float MotorSetRight = 0; //initialize motor movement numbers
+
+			if (VertPercentVal != 0) {
+				MotorSetLeft = MotorSetRight = VertPercentVal;
+				if(HorPercentVal != 0) {
+					if(HorPercentVal < 0 ) { // meaning stick is in range [-100,-1] {
+						MotorSetLeft = MotorSetLeft - MotorSetLeft*((-1)*HorPercentVal/100); // this reduces the Left Motors throttle by the percentage of the horizontal val
+					}
+					if(HorPercentVal > 0 ) { // meaning stick is in range [1,99] {
+						MotorSetRight = MotorSetRight - MotorSetRight*(HorPercentVal/100); // this reduces the right Motors throttle by the percentage of the horizontal val
+					}
+
+				}
+
 			}
+			MappedVals[0] = MotorSetLeft;
+			MappedVals[1] = MotorSetLeft;
+			for(int i = 4; i < 8; i++)
+			{
+				MappedVals[i] = MapRxToSwitch(ChannelVals[i]);
+			}
+
 		}
 		else //Flags are not good, set values to safe values
 		{
@@ -1457,10 +1524,20 @@ void Start_Battery_Monitor(void *argument)
 {
   /* USER CODE BEGIN Start_Battery_Monitor */
 	/* Infinite loop */
+	float voltage = FindAnalogInputVoltage();
+	uint8_t batSize = CalcBatterySize(voltage);
 	for(;;)
 	{
 		//BSP_LCD_DisplayStringAtLine(5, "BATTERY");
 		//__NOP();
+		voltage = FindAnalogInputVoltage();
+		if(voltage < (batSize * BAT_MIN_CELL_V)) {
+			FlagBuffer[BAT_LVL_FG] = false;
+		}
+		else
+		{
+			FlagBuffer[BAT_LVL_FG] = true;
+		}
 		osThreadSuspend(Battery_MonitorHandle);
 		//osDelay(5000);
 	}
@@ -1501,34 +1578,92 @@ void Start_Data_To_LCD(void *argument)
 
 		BSP_LCD_DisplayStringAtLine(12, FlagBufferChar);*/
 
+		if (LCDFirstPrint)
+		{
+			//On first run, print everything.
+			sprintf(ChanBuffer1, "ChanVals: 1:%04d", ChannelVals[0]);
+			sprintf(ChanBuffer2, "2:%04d 3:%04d", ChannelVals[1], ChannelVals[2]);
+			sprintf(ChanBuffer3, "4:%04d 5:%04d", ChannelVals[3], ChannelVals[4]);
 
-		sprintf(ChanBuffer1, "ChanVals: 1:%04d", ChannelVals[0]);
-		sprintf(ChanBuffer2, "2:%04d 3:%04d", ChannelVals[1], ChannelVals[2]);
-		sprintf(ChanBuffer3, "4:%04d 5:%04d", ChannelVals[3], ChannelVals[4]);
+			sprintf(MapBuffer1, "MappedVals: 1:%04d", (int)MappedVals[0]);
+			sprintf(MapBuffer2, "2:%04d 3:%04d", (int)MappedVals[1], (int)MappedVals[2]);
+			sprintf(MapBuffer3, "4:%04d 5:%04d", (int)MappedVals[3], (int)MappedVals[4]);
 
-		sprintf(MapBuffer1, "MappedVals: 1:%04d", (int)MappedVals[0]);
-		sprintf(MapBuffer2, "2:%04d 3:%04d", (int)MappedVals[1], (int)MappedVals[2]);
-		sprintf(MapBuffer3, "4:%04d 5:%04d", (int)MappedVals[3], (int)MappedVals[4]);
+			sprintf(MotorBuffer1, "1:%04d 2:%04d", MotorVals[0], MotorVals[1]);
+			sprintf(MotorBuffer2, "3:%04d 4:%04d", MotorVals[2], MotorVals[3]);
 
-		sprintf(MotorBuffer1, "1:%04d 2:%04d", MotorVals[0], MotorVals[1]);
-		sprintf(MotorBuffer2, "3:%04d 4:%04d", MotorVals[2], MotorVals[3]);
+			sprintf(FlagBufferChar, "FgBuf:[%1d,%1d,%1d,%1d,%1d]", FlagBuffer[0], FlagBuffer[1], FlagBuffer[2], FlagBuffer[3], FlagBuffer[4]);
 
-		sprintf(FlagBufferChar, "FgBuf:[%1d,%1d,%1d,%1d,%1d]", FlagBuffer[0], FlagBuffer[1], FlagBuffer[2], FlagBuffer[3], FlagBuffer[4]);
+			BSP_LCD_DisplayStringAtLine(0, ChanBuffer1);
+			BSP_LCD_DisplayStringAtLine(1, ChanBuffer2);
+			BSP_LCD_DisplayStringAtLine(2, ChanBuffer3);
 
-		BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
-		BSP_LCD_DisplayStringAtLine(0, ChanBuffer1);
-		BSP_LCD_DisplayStringAtLine(1, ChanBuffer2);
-		BSP_LCD_DisplayStringAtLine(2, ChanBuffer3);
+			BSP_LCD_DisplayStringAtLine(4, MapBuffer1);
+			BSP_LCD_DisplayStringAtLine(5, MapBuffer2);
+			BSP_LCD_DisplayStringAtLine(6, MapBuffer3);
 
-		BSP_LCD_DisplayStringAtLine(4, MapBuffer1);
-		BSP_LCD_DisplayStringAtLine(5, MapBuffer2);
-		BSP_LCD_DisplayStringAtLine(6, MapBuffer3);
+			BSP_LCD_DisplayStringAtLine(8, "MotorVals:");
+			BSP_LCD_DisplayStringAtLine(9, MotorBuffer1);
+			BSP_LCD_DisplayStringAtLine(10, MotorBuffer2);
 
-		BSP_LCD_DisplayStringAtLine(8, "MotorVals:");
-		BSP_LCD_DisplayStringAtLine(9, MotorBuffer1);
-		BSP_LCD_DisplayStringAtLine(10, MotorBuffer2);
+			BSP_LCD_DisplayStringAtLine(12, FlagBufferChar);
 
-		BSP_LCD_DisplayStringAtLine(12, FlagBufferChar);
+			LCDFirstPrint = 0;
+		}
+		else
+		{
+			//If any value has changed, reprint its line.
+			if (PrevChannelVals[0] != ChannelVals[0])
+			{
+				sprintf(ChanBuffer1, "ChanVals: 1:%04d", ChannelVals[0]);
+				BSP_LCD_DisplayStringAtLine(0, ChanBuffer1);
+			}
+			if ((PrevChannelVals[1] != ChannelVals[1]) || (PrevChannelVals[2] != ChannelVals[2]))
+			{
+				sprintf(ChanBuffer2, "2:%04d 3:%04d", ChannelVals[1], ChannelVals[2]);
+				BSP_LCD_DisplayStringAtLine(1, ChanBuffer2);
+			}
+			if ((PrevChannelVals[3] != ChannelVals[3]) || (PrevChannelVals[4] != ChannelVals[4]))
+			{
+				sprintf(ChanBuffer3, "4:%04d 5:%04d", ChannelVals[3], ChannelVals[4]);
+				BSP_LCD_DisplayStringAtLine(2, ChanBuffer3);
+			}
+
+			if ((int)PrevMappedVals[0] != (int)MappedVals[0])
+			{
+				sprintf(MapBuffer1, "MappedVals: 1:%04d", (int)MappedVals[0]);
+				BSP_LCD_DisplayStringAtLine(4, MapBuffer1);
+			}
+			if (((int)PrevMappedVals[1] != (int)MappedVals[1]) || ((int)PrevMappedVals[2] != (int)MappedVals[2]))
+			{
+				sprintf(MapBuffer2, "2:%04d 3:%04d", (int)MappedVals[1], (int)MappedVals[2]);
+				BSP_LCD_DisplayStringAtLine(5, MapBuffer2);
+			}
+			if (((int)PrevMappedVals[3] != (int)MappedVals[3]) || ((int)PrevMappedVals[4] != (int)MappedVals[4]))
+			{
+				sprintf(MapBuffer3, "4:%04d 5:%04d", (int)MappedVals[3], (int)MappedVals[4]);
+				BSP_LCD_DisplayStringAtLine(6, MapBuffer3);
+			}
+
+			if ((PrevMotorVals[0] != MotorVals[0]) || (PrevMappedVals[1] != MappedVals[1]))
+			{
+				sprintf(MotorBuffer1, "1:%04d 2:%04d", MotorVals[0], MotorVals[1]);
+				BSP_LCD_DisplayStringAtLine(9, MotorBuffer1);
+			}
+			if ((PrevMappedVals[2] != MappedVals[2]) || (PrevMappedVals[3] != MappedVals[3]))
+			{
+				sprintf(MotorBuffer2, "3:%04d 4:%04d", MotorVals[2], MotorVals[3]);
+				BSP_LCD_DisplayStringAtLine(10, MotorBuffer2);
+			}
+
+			if ((PrevFlagBuffer[0] != FlagBuffer[0]) || (PrevFlagBuffer[1] != FlagBuffer[1])
+				|| (PrevFlagBuffer[2] != FlagBuffer[2]) || (PrevFlagBuffer[3] != FlagBuffer[3])
+				|| (PrevFlagBuffer[4] != FlagBuffer[4]))
+			{
+				sprintf(FlagBufferChar, "FgBuf:[%1d,%1d,%1d,%1d,%1d]", FlagBuffer[0], FlagBuffer[1], FlagBuffer[2], FlagBuffer[3], FlagBuffer[4]);
+				BSP_LCD_DisplayStringAtLine(12, FlagBufferChar);
+			}
+		}
 
 		osThreadSuspend(Data_To_LCDHandle);
 		//osDelay(5000);
@@ -1549,6 +1684,7 @@ void Start_Map_To_Motors(void *argument)
 	/* Infinite loop */
 	for(;;)
 	{
+		//convert from percentage from [-100,100] to [1000,2000]
 		//BSP_LCD_DisplayStringAtLine(7, "MAP MOTORS");
 		for(int i = 0; i < MOTOR_VALS_SIZE; i++)
 		{
@@ -1556,7 +1692,6 @@ void Start_Map_To_Motors(void *argument)
 		}
 		//BSP_LCD_DisplayStringAtLine(7, "MAP MOTORS");
 		osThreadSuspend(Map_To_MotorsHandle);
-		//osDelay(5000);
 	}
   /* USER CODE END Start_Map_To_Motors */
 }
@@ -1577,6 +1712,7 @@ void LCDDelayTimCallback(void *argument)
 {
   /* USER CODE BEGIN LCDDelayTimCallback */
 	osThreadResume(Data_To_LCDHandle);
+	osThreadResume(Battery_MonitorHandle);
   /* USER CODE END LCDDelayTimCallback */
 }
 

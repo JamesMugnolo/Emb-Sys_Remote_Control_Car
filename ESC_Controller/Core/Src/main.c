@@ -53,6 +53,8 @@
 #define RX_VERTICAL_CH 1
 #define RX_HORIZONTAL_CH 0
 #define RX_ARM 4
+#define RX_THROTTLE_SW 5
+#define RX_BAYBLADE 6
 
 //SWITCH POS DEFS
 #define MAP_SWITCH_LOW 0
@@ -83,12 +85,13 @@
 #define RX_FAILSAFE_FG 2
 #define BAT_LVL_FG 3
 #define THROTTLE_FG 4
+#define BAYBLADE_FG 5
 
 //ARRAY DEFS
 #define CHAN_VALS_SIZE 8
 #define MAP_VALS_SIZE 8
 #define MOTOR_VALS_SIZE 4
-#define FLAG_BUFF_SIZE 5
+#define FLAG_BUFF_SIZE 6
 
 //TIM DEFS
 #define RADIO_READ_PERIOD 50
@@ -114,7 +117,7 @@ int count = 0;
 uint16_t ChannelVals[CHAN_VALS_SIZE] = {RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT, RX_MID_POINT};//Value of inputs as radio. Values [RX_MIN, RX_MAX].
 float MappedVals[MAP_VALS_SIZE] = {MAP_MID,MAP_MID,MAP_MID,MAP_MID,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW,MAP_SWITCH_LOW};//Value of inputs as percentage. Values within MAP_* or SWITCH_*.
 int MotorVals[MOTOR_VALS_SIZE] = {DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM, DUTY_CYCLE_DISARM}; //2 or 4 size (how many signals). Length of duty cycle in microsec.
-bool FlagBuffer[FLAG_BUFF_SIZE] = {0, 0, 0, 1, 1};//Flags! See *_FG defines.
+bool FlagBuffer[FLAG_BUFF_SIZE] = {0, 0, 0, 0, 0, 0};//Flags! See *_FG defines.
 float AnalogInputVoltage = 0.0;
 
 //Previous Values
@@ -305,12 +308,16 @@ int MapPercentToMotor(float perVal)
 	{
 		float upperRange = DUTY_CYCLE_MAX - DUTY_CYCLE_THROTTLE_OFF;
 		float lowerRange = DUTY_CYCLE_THROTTLE_OFF - DUTY_CYCLE_MIN;
+
+
 		//If throttle scalar flag is set, normalize to scaled range.
 		if(FlagBuffer[THROTTLE_FG])
 		{
 			upperRange = upperRange * THROTTLE_SCALAR;
 			lowerRange = lowerRange * THROTTLE_SCALAR;
 		}
+
+
 		//If midpoint, turn off.
 		if(perVal == MAP_MID)
 		{
@@ -1440,6 +1447,17 @@ void Receive_Radio_Signal(void *argument)
 			else
 				FlagBuffer[ARM_FG] = false;
 
+			if(MapRxToSwitch(ChannelVals[RX_THROTTLE_SW]) == MAP_SWITCH_HIGH)
+				FlagBuffer[THROTTLE_FG] = false;
+			else
+				FlagBuffer[THROTTLE_FG] = true;
+
+
+			if(MapRxToSwitch(ChannelVals[RX_BAYBLADE]) == MAP_SWITCH_HIGH)
+				FlagBuffer[BAYBLADE_FG] = true;
+			else
+				FlagBuffer[BAYBLADE_FG] = false;
+
 			count = (count + 1) % 2;
 	  	}
 		//Too many frames without connection.
@@ -1478,10 +1496,10 @@ void Start_Rx_Mapping(void *argument)
 			if (VertPercentVal != 0) {
 				MotorSetLeft = MotorSetRight = VertPercentVal;
 				if(HorPercentVal != 0) {
-					if(HorPercentVal < 0 ) { // meaning stick is in range [-100,-1] {
+					if(HorPercentVal > 0 ) { // meaning stick is in range [-100,-1] {
 						MotorSetLeft = MotorSetLeft - MotorSetLeft*((-1)*HorPercentVal/100); // this reduces the Left Motors throttle by the percentage of the horizontal val
 					}
-					if(HorPercentVal > 0 ) { // meaning stick is in range [1,99] {
+					if(HorPercentVal < 0 ) { // meaning stick is in range [1,100] {
 						MotorSetRight = MotorSetRight - MotorSetRight*(HorPercentVal/100); // this reduces the right Motors throttle by the percentage of the horizontal val
 					}
 
@@ -1489,10 +1507,15 @@ void Start_Rx_Mapping(void *argument)
 
 			}
 			MappedVals[0] = MotorSetLeft;
-			MappedVals[1] = MotorSetLeft;
+			MappedVals[1] = MotorSetRight;
 			for(int i = 4; i < 8; i++)
 			{
 				MappedVals[i] = MapRxToSwitch(ChannelVals[i]);
+			}
+
+			if(FlagBuffer[BAYBLADE_FG]) {
+				MappedVals[0] = MAP_MIN;
+				MappedVals[1] = MAP_MAX;
 			}
 
 		}
@@ -1711,7 +1734,7 @@ void RadioReadTimCallBack(void *argument)
 void LCDDelayTimCallback(void *argument)
 {
   /* USER CODE BEGIN LCDDelayTimCallback */
-	osThreadResume(Data_To_LCDHandle);
+	//osThreadResume(Data_To_LCDHandle);
 	osThreadResume(Battery_MonitorHandle);
   /* USER CODE END LCDDelayTimCallback */
 }

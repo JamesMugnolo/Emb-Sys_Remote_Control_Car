@@ -27,6 +27,7 @@
 #include "stm32F413h_discovery_lcd.h"
 #include <stdbool.h>
 #include "stdio.h"
+#include <math.h>
 #include "rc_input_sbus.h"
 #include "stm32f4xx_hal.h"
 /* USER CODE END Includes */
@@ -1496,11 +1497,13 @@ void Start_Rx_Mapping(void *argument)
 			if (VertPercentVal != 0) {
 				MotorSetLeft = MotorSetRight = VertPercentVal;
 				if(HorPercentVal != 0) {
-					if(HorPercentVal > 0 ) { // meaning stick is in range [-100,-1] {
-						MotorSetLeft = MotorSetLeft - MotorSetLeft*((-1)*HorPercentVal/100); // this reduces the Left Motors throttle by the percentage of the horizontal val
+					if(HorPercentVal < 0 ) { // meaning stick is in range [-100,-1] {
+						MotorSetLeft = MotorSetLeft * exp(5*HorPercentVal/100);
+						//MotorSetLeft = MotorSetLeft - MotorSetLeft*((-1)*HorPercentVal/100); // this reduces the Left Motors throttle by the percentage of the horizontal val
 					}
-					if(HorPercentVal < 0 ) { // meaning stick is in range [1,100] {
-						MotorSetRight = MotorSetRight - MotorSetRight*(HorPercentVal/100); // this reduces the right Motors throttle by the percentage of the horizontal val
+					if(HorPercentVal > 0 ) { // meaning stick is in range [1,100] {
+						MotorSetRight = MotorSetRight * exp(-5*HorPercentVal/100);
+						//MotorSetRight = MotorSetRight - MotorSetRight*(HorPercentVal/100); // this reduces the right Motors throttle by the percentage of the horizontal val
 					}
 
 				}
